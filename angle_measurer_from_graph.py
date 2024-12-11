@@ -95,6 +95,43 @@ def generation_number_generator(adjacency_matrix, point_array, x, p):
 			generation_numbers[neighbor] = next_generation
 			queue.append((neighbor, next_generation))
 
+	# label the correct zero generation points if there are more than one bifurcation point on the stem
+	for bifurcation_point in bifurcation_points:
+		if generation_numbers[bifurcation_point] == 1:
+			neighbors = np.where(adjacency_matrix[bifurcation_point] == 1)[0]
+			if np.sum([generation_numbers[neighbor] for neighbor in neighbors]) > 1:
+				multiple_bifurcation_points_in_stem = True
+				break
+			else:
+				multiple_bifurcation_points_in_stem = False
+	
+	if multiple_bifurcation_points_in_stem:
+		# find all the points that are connected to the two stem points and label them with zero generation
+		start, end = list(stem_points)
+		queue = deque([(start, [start])])    # Start with the initial node and its path
+		visited = set()  # Set to track visited nodes
+
+		while queue:
+			current, path = queue.popleft()  # Dequeue the next node and its path
+
+			if current == end:  # If the target node is reached, return the path
+				for point in path:
+					generation_numbers[point] = 0
+
+			visited.add(current)  # Mark the current node as visited
+
+			# Find neighbors of the current node
+			neighbors = np.where(adjacency_matrix[current] == 1)[0]
+			for neighbor in neighbors:
+				# Enqueue unvisited neighbors with the updated path
+				if neighbor not in visited and neighbor not in path:
+					queue.append((neighbor, path + [neighbor]))
+
+
+
+
+
+
 	return np.array(generation_numbers)
 
 # create a function that takes adjacency matrix and point array as input and returns the angles between the edges
@@ -190,7 +227,7 @@ def length_measurer(adjacency_matrix, point_array, generation_numbers):
 				# Skip already visited points not in the bifurcation list or points in the stem
 				if neighbor in visited and neighbor not in bifurcation_points:
 					continue
-				if generation_numbers[neighbor] == 0:
+				if generation_numbers[neighbor] == 0 and neighbor not in bifurcation_points:
 					continue
 				# Add distance to current length
 				distance = np.linalg.norm(point_array[current_point] - point_array[neighbor])
@@ -217,6 +254,8 @@ def length_measurer(adjacency_matrix, point_array, generation_numbers):
 						else:
 							continue
 					lower_generation = min(from_gen, to_gen)
+					if lower_generation == 0:
+						lower_generation = 1
 					if lower_generation not in segment_lengths:
 						segment_lengths[lower_generation] = []
 					segment_lengths[lower_generation].append(new_length)
@@ -263,13 +302,13 @@ def length_measurer(adjacency_matrix, point_array, generation_numbers):
 
 	# Now we have the local vectors indexed by the terminal point
 	# We want to find the angle between the vectors
+
 	for key, value in local_vectors.items():
 		if len(value) > 1:
 			vector1 = value[0]
 			vector2 = value[1]
 			angle = np.arccos(np.dot(vector1, vector2) / (np.linalg.norm(vector1) * np.linalg.norm(vector2)))
 			angle = np.degrees(angle)
-			print(angle)
 			generation_number = generation_numbers[key]
 			if generation_number not in local_angles:
 				local_angles[generation_number] = []
@@ -334,7 +373,9 @@ def length_measurer(adjacency_matrix, point_array, generation_numbers):
 
 	# Sort the dictionaries so that the keys are in ascending order
 	global_angles = dict(sorted(global_angles.items()))
+	global_angles = {key - 1: value for key, value in global_angles.items()}
 	local_angles = dict(sorted(local_angles.items()))
+	local_angles = {key - 1: value for key, value in local_angles.items()}
 	segment_lengths = dict(sorted(segment_lengths.items()))
 	local_dihedral_angles = dict(sorted(local_dihedral_angles.items()))
 	global_dihedral_angles = dict(sorted(global_dihedral_angles.items()))
@@ -355,14 +396,18 @@ adjacency_matrix, points = skeleton_data['adjacency_matrix'], skeleton_data['poi
 
 
 generation_numbers = generation_number_generator(adjacency_matrix, points, x, p)
-
+local_angles1 = local_angle_measurer(adjacency_matrix, points, generation_numbers)
 segment_lengths, global_angles, global_dihedral_angles, global_vectors, global_dihedral_normals, local_angles, local_dihedral_angles, local_vectors, local_dihedral_normals = length_measurer(adjacency_matrix, points, generation_numbers)
-print(f'global_dihedral_angles: {global_dihedral_angles}')
+#print(f'global_dihedral_angles: {global_dihedral_angles}')
+#print(f'local_dihedral_angles: {local_dihedral_angles}')
+print(f'global_angles: {global_angles}')
+print(f'local_angles: {local_angles}')
+print(f'segment_lengths: {segment_lengths}')
 # plot the global vectors and the original structure
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
 ax.scatter(points[:, 0], points[:, 1], points[:, 2], c='b', marker='o')
-for key, value in local_dihedral_normals.items():
+for key, value in local_vectors.items():
 	for vector in value:
 		ax.quiver(points[key][0], points[key][1], points[key][2], vector[0], vector[1], vector[2], length=1)
 
@@ -377,7 +422,6 @@ num_generations = len(unique_generations)
 generation_colors = color.get_colormap('viridis').map(generation_numbers_norm)
 #colors = generation_colors(generation_numbers_norm)
 
-'''
 # Map each generation to a color
 #generation_color_map = {gen: generation_colors[i] for i, gen in enumerate(unique_generations)}
 #colors = np.array([generation_color_map[gen] for gen in generation_numbers])
@@ -419,4 +463,3 @@ view.camera.move_speed = 0.1  # Reduce movement speed
 # Run the application
 if __name__ == '__main__':
 	app.run()
-'''
