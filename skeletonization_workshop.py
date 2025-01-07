@@ -12,20 +12,25 @@ import scipy.spatial as spatial
 import vg
 import time
 from scipy.sparse.csgraph import connected_components
+import plotly.graph_objects as go
+import os
+
 
 
 
 np.random.seed(0)
 
 
-def load_tree(path, scene=-1, cell_type=True):
+def load_tree(path, scene=-1):
 	data = np.load(path, allow_pickle=True)
 	x, p = data[:2]
 	if len(data) > 2:
 		cell_type = data[3]
 		tree_scene_x, tree_scene_p, tree_scene_cell_type = x[scene], p[scene], cell_type[scene]
+		print(f'x1', len(tree_scene_x))
 		mask = tree_scene_cell_type != 2
 		x = tree_scene_x[mask]
+		print('x2',len(x))
 		p = tree_scene_p[mask]
 	return x, p
 
@@ -46,7 +51,8 @@ def closest_point_on_lines(x, p, threshold, indices):
 		x0 = x[index]
 		p0 = p[index]
 		k+=1
-		print(f'{k} out of {len(indices)}')
+		if k%1000==0 or k==len(indices):
+			print(f'{k} out of {len(indices)}')
 
 		# find all the points within the threshold distance of the line spanned by the selected point x0 and the direction p0
 		# Distance from the points in x to the line spanned by x0 and p0
@@ -68,7 +74,7 @@ def closest_point_on_lines(x, p, threshold, indices):
 			close_to_line_to_x_new = points_close_to_line - x_new
 			distance_to_x_new = np.linalg.norm(close_to_line_to_x_new, axis=1)
 
-			valid_indices = distance_to_x_new < 2
+			valid_indices = distance_to_x_new < threshold
 			if np.sum(valid_indices) == 0:
 				continue
 			indices_close_to_line = indices_close_to_line[valid_indices]
@@ -120,7 +126,6 @@ def thin_line(points, point_cloud_thickness=0.53, iterations=1,sample_points=0):
 		regression_lines = []
 		for point in point_tree.data:
 			# Get list of points within specified radius {point_cloud_thickness}
-			start_time = time.perf_counter()
 			points_in_radius = point_tree.data[point_tree.query_ball_point(point, point_cloud_thickness)]
 
 			# Get mean of points within radius
@@ -147,9 +152,6 @@ def thin_line(points, point_cloud_thickness=0.53, iterations=1,sample_points=0):
 	# delete the same indices from the regression lines
 	regression_lines = [regression_lines[i] for i in range(len(regression_lines)) if neighbor_counts[i] > 0]
 
-
-
-
 	return points, regression_lines
 
 
@@ -157,6 +159,9 @@ def thin_line(points, point_cloud_thickness=0.53, iterations=1,sample_points=0):
 def sort_points(points, regression_lines, start_index = 522, sorted_point_distance=0.2):
 	sort_points_time = time.perf_counter()
 	# Index of point to be sorted
+	if len(points) < start_index:
+		start_index = 0
+
 	index = start_index
 
 	# sorted points array for left and right of intial point to be sorted
@@ -185,7 +190,6 @@ def sort_points(points, regression_lines, start_index = 522, sorted_point_distan
 		points_in_radius = point_tree.data[point_tree.query_ball_point(distR_point, sorted_point_distance / 3)]
 		if len(points_in_radius) < 1:
 			break
-		print(f'Number of points in radius: {len(points_in_radius)}')
 		# Neighbor of distR_point with smallest angle to regression line vector is selected as next point in order
 		# CAN BE OPTIMIZED
 		# 
@@ -245,7 +249,6 @@ def sort_points(points, regression_lines, start_index = 522, sorted_point_distan
 	#	break
 
 	# calculate distance from sort_points_left[-1] to sort_points_right[0] and the distance from sort_points_left[0] to sort_points_right[0]
-	print(f'lenght of left: {len(sort_points_left)} and lenght of right: {len(sort_points_right)}')
 	dist_left_to_right = np.linalg.norm(sort_points_left[-1] - sort_points_right[0])
 	dist_start_to_right = np.linalg.norm(sort_points_left[0] - sort_points_right[0])
 
@@ -258,7 +261,6 @@ def sort_points(points, regression_lines, start_index = 522, sorted_point_distan
 	else:
 		sorted_points_combined = sort_points_left[::-1] + sort_points_right
 
-	print("--- %s seconds to sort points ---" % (time.perf_counter() - sort_points_time))
 	return np.array(sorted_points_combined)
 
 # make connected lines in every segment
@@ -268,19 +270,15 @@ def sort_points_in_segments(thinned_points, regression_lines, sorted_points_dist
 
 	# collect the sorted points in a list
 	sorted_points_collected = []
-	k = 0
 	while True:
 		sorted_points = sort_points(thinned_points[allowed_indices], [regression_lines[i] for i in allowed_indices], start_index = np.random.choice(len(thinned_points[allowed_indices])), sorted_point_distance=sorted_points_distance)
 		if len(sorted_points) > 1: # discard lines with only one point
-			k+=1
-			print('line_segment_count',k)
 			sorted_points_collected.append(sorted_points)
 
 		# delete all the points in thinned_points that are within sorted_points_distance of the sorted_points
 		distances = np.linalg.norm(thinned_points[:, None] - sorted_points, axis=2)
 		indices = np.where(np.min(distances, axis=1) < sorted_points_distance)[0]
 		allowed_indices = [i for i in allowed_indices if i not in indices]
-		print(len(allowed_indices))
 		if len(allowed_indices) < 1: # when no points are left we end the loop and return the line collections
 			break
 	return sorted_points_collected
@@ -360,10 +358,9 @@ def connect_triplet_endpoints(adjacency_matrix, endpoints, points, radius):
 	used_index = []
 	if number_of_triplet_comb < 1000000:
 		valid_triplets = calculate_midpoints_of_three_endpoints(endpoints, adjacency_matrix, points, distance_threshold=radius)
-		print(f'valid triplet: {valid_triplets}')
+		#print(f'valid triplet: {valid_triplets}')
 		for triplet, midpoint in valid_triplets:
 			if triplet[0] in used_index or triplet[1] in used_index or triplet[2] in used_index:
-				print('used index')
 				continue
 			# check if the vector from each of the points to the midpoint is parallel to the vector going from the points connected to the endpoints to the endpoints
 			parallel = True
@@ -373,7 +370,6 @@ def connect_triplet_endpoints(adjacency_matrix, endpoints, points, radius):
 				# Find the point connected to the current endpoint
 				connected_indices = np.where(adjacency_matrix[endpoint] == 1)[0]
 				if len(connected_indices) == 0:
-					print(f"No connected point found for endpoint {endpoint}. Skipping parallelism check.")
 					parallel = False
 					break
 
@@ -391,7 +387,6 @@ def connect_triplet_endpoints(adjacency_matrix, endpoints, points, radius):
 				# Check for parallelism
 				dot_product = np.dot(vector_to_endpoint, vector_to_midpoint)
 				if np.abs(dot_product) < 0.1:  # Threshold for parallelism
-					print(f"Vectors not parallel for endpoint {endpoint}. Discarding triplet.")
 					parallel = False
 					break
 
@@ -418,7 +413,7 @@ def connect_triplet_endpoints(adjacency_matrix, endpoints, points, radius):
 			endpoints.remove(triplet[1])
 			endpoints.remove(triplet[2])
 	else: 
-		print('Too many triplet combinations to calculate in decent time. Are you sure you want to continue?')
+		print(f'Too many triplet combinations to calculate in decent time. Your triplet count is: {number_of_triplet_comb}. Are you sure you want to continue? If so, ctrl+F the code at "number_of_triplet_comb" and change the threshold to a higher number')
 		exit()
 
 	return adjacency_matrix, endpoints, points, used_index
@@ -444,52 +439,16 @@ def connect_single_endpoints(adjacency_matrix, endpoints, points, used_index):
 			closest_point = np.argmin(distances)
 			# check if the distance is below some threshold while avoiding connecting to the same point
 			if distances[closest_point] < 2:
-				''''
-				# make a midpoint between the endpoint and the closest point
-				# connect the endpoint to the midpoint by adding a row and column to the adjacency matrix
-				adjacency_matrix = np.pad(adjacency_matrix, ((0, 1), (0, 1)), mode='constant')
-				adjacency_matrix[-1, -1] = 0
-				adjacency_matrix[-1, endpoint] = 1
-				adjacency_matrix[endpoint, -1] = 1
-				# also connect the midpoint to the closest point
-				adjacency_matrix[-1, closest_point] = 1
-				adjacency_matrix[closest_point, -1] = 1
-
-				# add the midpoint to the points array after calculating the midpoint
-				midpoint = (points[endpoint] + points[closest_point]) / 2
-				points = np.vstack((points, midpoint))
-				print('Connected endpoint')
-				# remove the endpoint from the endpoints
-				endpoints.remove(endpoint)
-				# add the endpoint to the used index as well as the closest point and the midpoint
-				used_index.extend([endpoint, closest_point, len(points) - 1])
-				'''
 				# connect the endpoint to the closest point
 				adjacency_matrix[endpoint, closest_point] = 1
 				adjacency_matrix[closest_point, endpoint] = 1
 				used_index.extend([endpoint, closest_point])
-
 				break
-			if i == 4:
-				print('No connection found for endpoint')
-		print('endpoints left:', len(endpoints))
-	G = nx.from_numpy_matrix(adjacency_matrix)
-	is_connected = nx.is_connected(G) 
-	if is_connected:
-		print("Graph is connected:", is_connected)
-	else:
-		print("Graph is connected:", is_connected)
-		components = [len(c) for c in nx.connected_components(G)]  # Get the number of nodes in each connected component
-		print("Number of connected components:", len(components), "with sizes:", components)
-		# get the adjacency matrix and points of the largest connected component
-		#largest_component = max(nx.connected_components(G), key=len)
-		#indices = np.array(list(largest_component))
-		#adjacency_matrix = adjacency_matrix[indices][:, indices]
-		#points = points[indices]
-
 		
 
 	return adjacency_matrix, endpoints, points, used_index
+
+
 def collapse_loops(adj_matrix, points):
 	"""
 	Collapse closed loops in the graph into a single center point.
@@ -503,7 +462,6 @@ def collapse_loops(adj_matrix, points):
 	- updated_points: numpy.ndarray, updated 3D coordinates of the points.
 	"""
 	from scipy.spatial.distance import pdist, squareform
-	print("Adjacency matrix shape:", adj_matrix.shape, "Points shape:", points.shape)
 	def detect_cycles(adj_matrix):
 		"""Detect closed loops (cycles) in the graph."""
 		from collections import defaultdict
@@ -580,23 +538,17 @@ def collapse_loops(adj_matrix, points):
 		for neighbor in neighbors_to_connect:
 			updated_adj_matrix[center_idx, neighbor] = 1
 			updated_adj_matrix[neighbor, center_idx] = 1
-	print("Adjacency matrix shape:", updated_adj_matrix.shape, "Points shape:", len(updated_points))
 
 	return updated_adj_matrix, np.array(updated_points)
 
 def remove_isolated_points(adj_matrix, points):
 	# Identify non-isolated points (rows or columns with non-zero entries)
-	print("Adjacency matrix shape:", adj_matrix.shape)
-	print("Points array shape:", points.shape)
 
 	connected_mask = np.any(adj_matrix > 0, axis=1)
 
 	# Filter out isolated points
 	updated_adj_matrix = adj_matrix[connected_mask][:, connected_mask]
 	updated_points = points[connected_mask]
-	print("Updated adjacency matrix shape:", updated_adj_matrix.shape)
-	print("Updated points array shape:", updated_points.shape)
-
 	return updated_adj_matrix, updated_points
 
 def post_processing(adjacency_matrix, points, x_points, used_index, closed_loop_removal=True):
@@ -629,7 +581,6 @@ def post_processing(adjacency_matrix, points, x_points, used_index, closed_loop_
 						# If the segment crosses a boundary, remove the connection
 						adjacency_matrix[u, v] = 0
 						adjacency_matrix[v, u] = 0
-						print(f"Removed connection between {u} and {v} (crosses boundary).")
 						break
 
 	if closed_loop_removal==True:
@@ -644,31 +595,23 @@ def post_processing(adjacency_matrix, points, x_points, used_index, closed_loop_
 	is_connected = nx.is_connected(G) 
 	if is_connected:
 		print("Graph is connected:", is_connected)
+		adjacency_matrix_largest = adjacency_matrix
+		points_largest = points
 	else:
 		print("Graph is connected:", is_connected)
 		components = [len(c) for c in nx.connected_components(G)]  # Get the number of nodes in each connected component
 		print("Number of connected components:", len(components), "with sizes:", components)
 		# get the adjacency matrix and points of the largest connected component
-		#largest_component = max(nx.connected_components(G), key=len)
-		#indices = np.array(list(largest_component))
-		#adjacency_matrix = adjacency_matrix[indices][:, indices]
-		#points = points[indices]
+		largest_component = max(nx.connected_components(G), key=len)
+		indices = np.array(list(largest_component))
+		adjacency_matrix_largest = adjacency_matrix[indices][:, indices]
+		points_largest = points[indices]
 
-	return adjacency_matrix, points
+	return adjacency_matrix_largest, points_largest, adjacency_matrix, points
 		
 
 
 
-
-
-
-
-
-
-import plotly.graph_objects as go
-from scipy.sparse.csgraph import connected_components
-import plotly.graph_objects as go
-import numpy as np
 
 def visualize_graph_3d(adj_matrix, points_flattened, x_points=None):
 	"""
@@ -751,13 +694,13 @@ def visualize_graph_3d(adj_matrix, points_flattened, x_points=None):
 
 
 
-div_time = 11000
+div_time = 12000
 lam3 = 0.1
-path = f'master_thesis_animations/growth_wnt_alpha_bifurcation/isotropic_alpha_wnt_cells/div_time={div_time}_lam3={lam3}/sim_mes_div_time={div_time}_lam3={lam3}.npy'
-path = 'last_frame_data.npy'
+path = f'master_thesis_animations/growth_wnt_alpha_bifurcation/isotropic_alpha_wnt_cells/div_time={div_time}_lam3={lam3}_2'
+scene_list = [0, 1, 2, 3, 4, 6, 7]
+file_name = f'/sim_mes_div_time={div_time}_lam3={lam3}_2.npy'
+x, p = load_tree(path+file_name, scene=2)
 
-
-x, p = load_tree(path, scene=-1, cell_type=False)
 p = p / np.linalg.norm(p, axis=1)[:, None]
 
 threshold = 1.5
@@ -766,22 +709,34 @@ indices = range(number_of_points)
 
 results, midpoints = closest_point_on_lines(x, p, threshold, indices)
 
-# Now we thin the line
-thinned_points, regression_lines = thin_line(midpoints, point_cloud_thickness=5, iterations=2,sample_points=0)
+## Now we thin the line
+#thinned_points, regression_lines = thin_line(midpoints, point_cloud_thickness=5, iterations=2,sample_points=0)
 
-sorted_points_collected = sort_points_in_segments(thinned_points, regression_lines, sorted_points_distance=3)
+#sorted_points_collected = sort_points_in_segments(thinned_points, regression_lines, sorted_points_distance=3)
 
-adjacency_matrix1, endpoints, points = create_adjacency_matrix(sorted_points_collected)
+#adjacency_matrix1, endpoints, points = create_adjacency_matrix(sorted_points_collected)
 
-adjacency_matrix2, endpoints, points, used_index = connect_triplet_endpoints(adjacency_matrix1, endpoints, points, radius=5)
+#adjacency_matrix2, endpoints, points, used_index = connect_triplet_endpoints(adjacency_matrix1, endpoints, points, radius=5)
 
-adjacency_matrix3, endpoints, points, used_index = connect_single_endpoints(adjacency_matrix2, endpoints, points, used_index)
+#adjacency_matrix3, endpoints, points, used_index = connect_single_endpoints(adjacency_matrix2, endpoints, points, used_index)
 
-adjacency_matrix4, points = post_processing(adjacency_matrix3, points, x, used_index, closed_loop_removal=False)
+#adjacency_matrix_largest, points_largest, adjacency_matrix4, points = post_processing(adjacency_matrix3, points, x, used_index, closed_loop_removal=True)
+
+## Extract the directory path without the last subfolder
+##directory_path = os.path.dirname(path)
 
 
-visualize_graph_3d(adjacency_matrix4, points, x_points=x)
+#visualize_graph_3d(adjacency_matrix4, points, x_points=x)
 
+
+
+
+
+
+
+
+
+'''
 # Visualize the results
 canvas = scene.SceneCanvas(keys='interactive', show=True)
 view = canvas.central_widget.add_view()
@@ -810,29 +765,11 @@ for idx, sorted_points in enumerate(sorted_points_collected):
 	sorted_marker.set_data(sorted_points, face_color=index_color[idx], size=1.2, edge_width=0)
 	view.add(sorted_marker)
 
-#	line = scene.Line(
-#		sorted_points,
-#		color='blue',  # Line color
-#		width=5.0,     # Line width
-#		connect='strip',  # Connect points sequentially without closing the loop
-#		parent=view.scene,
-#	)
-
 
 structure = visuals.Markers(spherical=True, scaling=True)
 structure.set_data(x, face_color=[1,1,1, 1], size=1.2, edge_width=0)
 view.add(structure)
 
-
-
-#midpoints_marker = visuals.Markers(spherical=True, scaling=True)
-#midpoints_marker.set_data(midpoints, face_color='red', size=1, edge_width=0)
-#view.add(midpoints_marker)
-
-
-#thinned_points_marker = visuals.Markers(spherical=True, scaling=True)
-#thinned_points_marker.set_data(thinned_points, face_color='yellow', size=0.8, edge_width=0)
-#view.add(thinned_points_marker)
 
 view.camera = 'fly'
 view.camera.move_speed = 0.1  # Reduce movement speed
@@ -841,3 +778,4 @@ view.camera.move_speed = 0.1  # Reduce movement speed
 if __name__ == '__main__':
 	canvas.app.run()
 
+'''
